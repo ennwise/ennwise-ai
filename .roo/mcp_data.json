@@ -1,5 +1,6 @@
 {
     "tasks": {
+<<<<<<< HEAD
         "1": {
             "id": "1",
             "name": "QuoteWise Frontend Implementation - Complete UI Development",
@@ -2174,5 +2175,8 @@
             "created_at": "2025-05-23T21:12:05.073Z",
             "updated_at": "2025-05-23T21:32:30.577Z"
         }
+=======
+        
+>>>>>>> 79dee6710cf17b6b99e70dbdd6f4676ac0d5a33b
     }
 }
