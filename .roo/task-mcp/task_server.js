@@ -9,58 +9,93 @@ const {
     McpError,
 } = require('@modelcontextprotocol/sdk/types.js');
 const fs = require('fs');
-const path = require('path'); // Added for robust path joining
+const path = require('path');
 
-// The DATA_FILE path needs to be relative to the workspace root,
-// as the server script might be run from there by the MCP system.
-// Or, if the server is always run from within .roo/task-mcp/, then it could be relative from there.
-// Given the build step, it's safer to assume it might be run from workspace root,
-// or the MCP config should specify the CWD.
-// For now, keeping it as originally intended by the user, assuming CWD is workspace root.
-const DATA_FILE = "../mcp_data.json";
+// New directory for storing individual task JSON files
+const TASKS_DIR = "../project_tasks_data"; // Changed from DATA_FILE
 
-// Ensure .roo directory exists for mcp_data.json
-const dataDir = path.dirname(DATA_FILE);
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
+// Ensure TASKS_DIR exists
+if (!fs.existsSync(TASKS_DIR)) {
+    fs.mkdirSync(TASKS_DIR, { recursive: true });
+    console.log(`Created tasks directory at: ${path.resolve(TASKS_DIR)}`);
+} else {
+    console.log(`Tasks directory already exists at: ${path.resolve(TASKS_DIR)}`);
 }
 
-
-// User-provided functions (ensure DATA_FILE is accessible or adjust paths if needed)
-// Original functions provided by the user start here
 /**
- * Loads data from the JSON file.
- * @returns {object} The loaded data, or { tasks: {} } on error or if file doesn't exist.
+ * Loads a single task from its JSON file.
+ * @param {string} taskId - The ID of the task to load.
+ * @returns {object|null} The loaded task data, or null on error or if file doesn't exist.
  */
-function loadData() {
-    if (fs.existsSync(DATA_FILE)) {
+function loadTask(taskId) {
+    const taskFile = path.join(TASKS_DIR, `task-${taskId}.json`);
+    if (fs.existsSync(taskFile)) {
         try {
-            const fileContent = fs.readFileSync(DATA_FILE, 'utf8');
+            const fileContent = fs.readFileSync(taskFile, 'utf8');
             return JSON.parse(fileContent);
         } catch (error) {
-            console.error("Error loading or parsing data:", error);
-            return { tasks: {} }; // Ensure tasks object exists
+            console.error(`Error loading or parsing task ${taskId}:`, error);
+            return null;
         }
     }
-    return { tasks: {} }; // Ensure tasks object exists
+    return null;
 }
 
 /**
- * Saves data to the JSON file.
- * @param {object} data - The data object to save.
+ * Saves a single task object to its JSON file.
+ * @param {object} taskData - The task object to save. Must have an 'id' property.
  */
-function saveData(data) {
+function saveTask(taskData) {
+    if (!taskData || !taskData.id) {
+        console.error("Error saving task: Task data or ID is missing.", taskData);
+        return;
+    }
+    const taskFile = path.join(TASKS_DIR, `task-${taskData.id}.json`);
     try {
-        const jsonData = JSON.stringify(data, null, 4); // Pretty print JSON
-        fs.writeFileSync(DATA_FILE, jsonData, 'utf8');
+        const jsonData = JSON.stringify(taskData, null, 4); // Pretty print JSON
+        fs.writeFileSync(taskFile, jsonData, 'utf8');
     } catch (error) {
-        console.error("Error saving data:", error);
+        console.error(`Error saving task ${taskData.id}:`, error);
     }
 }
+
+
+/**
+ * Loads all tasks from their individual JSON files in the TASKS_DIR.
+ * @returns {{ tasks: object }} An object containing all tasks, keyed by ID.
+ */
+function loadAllTasks() {
+    const tasks = {};
+    if (!fs.existsSync(TASKS_DIR)) {
+        console.warn(`Tasks directory ${path.resolve(TASKS_DIR)} not found. Returning empty tasks.`);
+        return { tasks: {} };
+    }
+
+    try {
+        const files = fs.readdirSync(TASKS_DIR);
+        for (const file of files) {
+            if (file.startsWith('task-') && file.endsWith('.json')) {
+                const taskIdMatch = file.match(/^task-(.+)\.json$/);
+                if (taskIdMatch && taskIdMatch[1]) {
+                    const taskId = taskIdMatch[1];
+                    const taskData = loadTask(taskId);
+                    if (taskData) {
+                        tasks[taskId] = taskData;
+                    }
+                }
+            }
+        }
+    } catch (error) {
+        console.error(`Error reading tasks directory ${path.resolve(TASKS_DIR)}:`, error);
+        return { tasks: {} }; // Return empty on error
+    }
+    return { tasks };
+}
+
 
 /**
  * Generates the next available ID for an object (dictionary).
- * @param {object} dataObject - The object to generate an ID for.
+ * @param {object} dataObject - The object to generate an ID for (e.g., allTasks.tasks, task.todos).
  * @returns {number} The next available ID.
  */
 function nextId(dataObject) {
@@ -75,20 +110,20 @@ function nextId(dataObject) {
 }
 
 /**
- * Adds a new task.
- * @param {object} tasks - The tasks object.
+ * Adds a new task. Now also saves the new task to its own file.
+ * @param {object} allTasksObject - The object containing all tasks (e.g., from loadAllTasks().tasks).
  * @param {string} name - The name of the new task.
  * @param {string|null} [parentId=null] - The ID of the parent task, if any.
  * @returns {[string|null, string]} A tuple containing the new task ID (or null on error) and a status message.
  */
-function addTask(tasks, name, parentId = null) {
-    const taskId = String(nextId(tasks));
+function addTask(allTasksObject, name, parentId = null) {
+    const taskId = String(nextId(allTasksObject));
 
-    if (parentId && !tasks[String(parentId)]) {
+    if (parentId && !allTasksObject[String(parentId)]) {
         return [null, `Error: Parent task ID ${parentId} not found for task '${name}'.`];
     }
 
-    tasks[taskId] = {
+    const newTask = {
         id: taskId,
         name: name,
         parent_id: parentId ? String(parentId) : null,
@@ -98,36 +133,38 @@ function addTask(tasks, name, parentId = null) {
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
     };
+    allTasksObject[taskId] = newTask; // Add to in-memory collection
+    saveTask(newTask); // Save the new task to its file
     return [taskId, `Task '${name}' (ID: ${taskId}) created.`];
 }
 
 /**
- * Adds multiple tasks.
- * @param {object} tasks - The tasks object.
+ * Adds multiple tasks. Each task is saved individually.
+ * @param {object} allTasksObject - The tasks object.
  * @param {Array<object>} taskDefs - Array of task definitions.
  * @returns {Array<[string|null, string]>} An array of results.
  */
-function addTasksBulk(tasks, taskDefs) {
+function addTasksBulk(allTasksObject, taskDefs) {
     const results = [];
     for (const def of taskDefs) {
-        results.push(addTask(tasks, def.name, def.parentId));
+        results.push(addTask(allTasksObject, def.name, def.parentId));
     }
     return results;
 }
 
 /**
- * Adds a todo item to a specific task.
- * @param {object} tasks - The tasks object.
+ * Adds a todo item to a specific task. Saves the modified task.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @param {string} text - The text content of the todo.
  * @returns {string} A status message.
  */
-function addTodo(tasks, taskId, text) {
+function addTodo(allTasksObject, taskId, text) {
     const strTaskId = String(taskId);
-    if (!tasks[strTaskId]) {
+    if (!allTasksObject[strTaskId]) {
         return `Error: Task ID ${strTaskId} not found for adding todo.`;
     }
-    const task = tasks[strTaskId];
+    const task = allTasksObject[strTaskId];
     if (!task.todos) task.todos = {};
     const todoId = String(nextId(task.todos));
     task.todos[todoId] = {
@@ -137,27 +174,29 @@ function addTodo(tasks, taskId, text) {
         created_at: new Date().toISOString()
     };
     task.updated_at = new Date().toISOString();
+    saveTask(task); 
     return `Todo '${text}' (ID: ${todoId}) added to task ${strTaskId}.`;
 }
 
 /**
- * Adds multiple todos to a specific task.
- * @param {object} tasks - The tasks object.
+ * Adds multiple todos to a specific task. Saves the modified task once.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @param {Array<string>} todoTexts - Array of todo text contents.
  * @returns {object} An object with success and error messages.
  */
-function addTodosBulk(tasks, taskId, todoTexts) {
+function addTodosBulk(allTasksObject, taskId, todoTexts) {
     const strTaskId = String(taskId);
-    if (!tasks[strTaskId]) {
-        return { successes: [], errors: [`Error: Task ID ${strTaskId} not found.`]};
+    if (!allTasksObject[strTaskId]) {
+        return { successes: [], errors: [`Error: Task ID ${strTaskId} not found.`] };
     }
+    const task = allTasksObject[strTaskId];
     const successes = [];
-    const errors = [];
+    const errors = []; 
     let taskUpdated = false;
+
+    if (!task.todos) task.todos = {};
     for (const text of todoTexts) {
-        const task = tasks[strTaskId];
-        if (!task.todos) task.todos = {};
         const todoId = String(nextId(task.todos));
         task.todos[todoId] = {
             id: todoId,
@@ -168,54 +207,58 @@ function addTodosBulk(tasks, taskId, todoTexts) {
         successes.push(`Todo '${text}' (ID: ${todoId}) added to task ${strTaskId}.`);
         taskUpdated = true;
     }
+
     if (taskUpdated) {
-        tasks[strTaskId].updated_at = new Date().toISOString();
+        task.updated_at = new Date().toISOString();
+        saveTask(task); 
     }
     return { successes, errors };
 }
 
 /**
- * Toggles the 'done' status of a todo item.
- * @param {object} tasks - The tasks object.
+ * Toggles the 'done' status of a todo item. Saves the modified task.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @param {string} todoId - The ID of the todo.
  * @returns {string} A status message.
  */
-function toggleTodo(tasks, taskId, todoId) {
+function toggleTodo(allTasksObject, taskId, todoId) {
     const strTaskId = String(taskId);
     const strTodoId = String(todoId);
 
-    if (!tasks[strTaskId]) {
+    if (!allTasksObject[strTaskId]) {
         return `Error: Task ID ${strTaskId} not found.`;
     }
-    const task = tasks[strTaskId];
+    const task = allTasksObject[strTaskId];
     if (!task.todos || !task.todos[strTodoId]) {
         return `Error: Todo ID ${strTodoId} not found in task ${strTaskId}.`;
     }
     task.todos[strTodoId].done = !task.todos[strTodoId].done;
     task.updated_at = new Date().toISOString();
+    saveTask(task); 
     const status = task.todos[strTodoId].done ? "done" : "not done";
     return `Todo ${strTodoId} in task ${strTaskId} marked as ${status}.`;
 }
 
 /**
- * Toggles the 'done' status of multiple todo items.
- * @param {object} tasks - The tasks object.
+ * Toggles the 'done' status of multiple todo items. Saves the modified task once.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @param {Array<string>} todoIds - Array of todo IDs.
  * @returns {object} An object with success and error messages.
  */
-function toggleTodosBulk(tasks, taskId, todoIds) {
+function toggleTodosBulk(allTasksObject, taskId, todoIds) {
     const strTaskId = String(taskId);
-    if (!tasks[strTaskId]) {
+    if (!allTasksObject[strTaskId]) {
         return { successes: [], errors: [`Error: Task ID ${strTaskId} not found.`] };
     }
+    const task = allTasksObject[strTaskId];
     const successes = [];
     const errors = [];
     let taskUpdated = false;
+
     for (const todoId of todoIds) {
         const strTodoId = String(todoId);
-        const task = tasks[strTaskId];
         if (!task.todos || !task.todos[strTodoId]) {
             errors.push(`Error: Todo ID ${strTodoId} not found in task ${strTaskId}.`);
             continue;
@@ -225,26 +268,28 @@ function toggleTodosBulk(tasks, taskId, todoIds) {
         successes.push(`Todo ${strTodoId} in task ${strTaskId} marked as ${status}.`);
         taskUpdated = true;
     }
+
     if (taskUpdated) {
-        tasks[strTaskId].updated_at = new Date().toISOString();
+        task.updated_at = new Date().toISOString();
+        saveTask(task); 
     }
     return { successes, errors };
 }
 
 /**
- * Adds a note to a specific task.
- * @param {object} tasks - The tasks object.
+ * Adds a note to a specific task. Saves the modified task.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @param {string} noteText - The text content of the note.
  * @param {string} [noteType="general"] - The type of the note.
  * @returns {string} A status message.
  */
-function addNote(tasks, taskId, noteText, noteType = "general") {
+function addNote(allTasksObject, taskId, noteText, noteType = "general") {
     const strTaskId = String(taskId);
-    if (!tasks[strTaskId]) {
+    if (!allTasksObject[strTaskId]) {
         return `Error: Task ID ${strTaskId} not found.`;
     }
-    const task = tasks[strTaskId];
+    const task = allTasksObject[strTaskId];
     if (!task.notes) task.notes = {};
     const noteId = String(nextId(task.notes));
     task.notes[noteId] = {
@@ -254,28 +299,29 @@ function addNote(tasks, taskId, noteText, noteType = "general") {
         created_at: new Date().toISOString()
     };
     task.updated_at = new Date().toISOString();
+    saveTask(task); 
     return `Note (ID: ${noteId}, Type: ${noteType}) added to task ${strTaskId}.`;
 }
 
 /**
- * Adds multiple notes to a specific task.
- * @param {object} tasks - The tasks object.
+ * Adds multiple notes to a specific task. Saves the modified task once.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @param {Array<object>} noteDefs - Array of note definitions.
  * @returns {object} An object with success and error messages.
  */
-function addNotesBulk(tasks, taskId, noteDefs) {
+function addNotesBulk(allTasksObject, taskId, noteDefs) {
     const strTaskId = String(taskId);
-    if (!tasks[strTaskId]) {
+    if (!allTasksObject[strTaskId]) {
         return { successes: [], errors: [`Error: Task ID ${strTaskId} not found.`] };
     }
+    const task = allTasksObject[strTaskId];
     const successes = [];
-    const errors = [];
+    const errors = []; 
     let taskUpdated = false;
 
+    if (!task.notes) task.notes = {};
     for (const def of noteDefs) {
-        const task = tasks[strTaskId];
-        if (!task.notes) task.notes = {};
         const noteId = String(nextId(task.notes));
         task.notes[noteId] = {
             id: noteId,
@@ -286,60 +332,75 @@ function addNotesBulk(tasks, taskId, noteDefs) {
         successes.push(`Note (ID: ${noteId}, Type: ${def.type || "general"}) added to task ${strTaskId}.`);
         taskUpdated = true;
     }
+
     if (taskUpdated) {
-        tasks[strTaskId].updated_at = new Date().toISOString();
+        task.updated_at = new Date().toISOString();
+        saveTask(task); 
     }
     return { successes, errors };
 }
 
 /**
- * Links a task to a parent task.
- * @param {object} tasks - The tasks object.
- * @param {string} taskId - The ID of the task to be linked.
+ * Links a task to a parent task. Saves both modified tasks if successful.
+ * @param {object} allTasksObject - The tasks object.
+ * @param {string} taskId - The ID of the task to be linked (child).
  * @param {string} parentId - The ID of the parent task.
  * @returns {string} A status message.
  */
-function linkTask(tasks, taskId, parentId) {
+function linkTask(allTasksObject, taskId, parentId) {
     const strTaskId = String(taskId);
     const strParentId = String(parentId);
 
-    if (!tasks[strTaskId]) return `Error: Task ID ${strTaskId} not found.`;
-    if (!tasks[strParentId]) return `Error: Parent task ID ${strParentId} not found.`;
+    if (!allTasksObject[strTaskId]) return `Error: Task ID ${strTaskId} not found.`;
+    if (!allTasksObject[strParentId]) return `Error: Parent task ID ${strParentId} not found.`;
     if (strTaskId === strParentId) return "Error: Cannot link a task to itself.";
 
-    let current = tasks[strParentId];
-    const visitedDuringCheck = new Set([strTaskId]);
-    while (current) {
-        if (visitedDuringCheck.has(current.id)) {
-            return `Error: Circular dependency detected. Cannot link ${strTaskId} to ${strParentId}. Path includes ${current.id}.`;
-        }
-        visitedDuringCheck.add(current.id);
-        if (current.parent_id === strTaskId) {
-             return `Error: Circular dependency detected. ${strParentId} is an ancestor of ${strTaskId}.`;
-        }
-        if (!current.parent_id) break;
-        if (!tasks[current.parent_id]) {
-            return `Error: Broken parent chain. Ancestor ${current.parent_id} of ${strParentId} not found.`;
-        }
-        current = tasks[current.parent_id];
-    }
+    // Check for circular dependency: Traverse up from the proposed parent (strParentId).
+    // If we encounter strTaskId, then linking strTaskId to strParentId would create a circle.
+    let ancestor = allTasksObject[strParentId];
+    const visitedAncestors = new Set(); // To detect cycles in the parent's own ancestry
 
-    tasks[strTaskId].parent_id = strParentId;
-    tasks[strTaskId].updated_at = new Date().toISOString();
-    tasks[strParentId].updated_at = new Date().toISOString();
+    while (ancestor) {
+        if (ancestor.id === strTaskId) {
+            return `Error: Circular dependency detected. Task ${strTaskId} is an ancestor of ${strParentId}. Cannot link.`;
+        }
+        if (visitedAncestors.has(ancestor.id)) {
+             // This indicates a pre-existing cycle in the parent's chain, data corruption.
+             return `Error: Corrupted data - circular dependency already exists in ancestors of ${strParentId} involving ${ancestor.id}. Cannot link.`;
+        }
+        visitedAncestors.add(ancestor.id);
+
+        if (!ancestor.parent_id) break; // Reached the top of this branch
+
+        if (!allTasksObject[ancestor.parent_id]) {
+            return `Error: Broken parent chain for potential parent ${strParentId}. Ancestor ${ancestor.parent_id} not found.`;
+        }
+        ancestor = allTasksObject[ancestor.parent_id];
+    }
+    
+    const childTask = allTasksObject[strTaskId];
+    const proposedParentTask = allTasksObject[strParentId];
+
+    childTask.parent_id = strParentId;
+    childTask.updated_at = new Date().toISOString();
+    saveTask(childTask);
+
+    proposedParentTask.updated_at = new Date().toISOString(); 
+    saveTask(proposedParentTask);
+
     return `Task ${strTaskId} linked to parent task ${strParentId}.`;
 }
 
 /**
- * Links multiple tasks to their respective parents.
- * @param {object} tasks - The tasks object.
+ * Links multiple tasks to their respective parents. Each link saves relevant tasks.
+ * @param {object} allTasksObject - The tasks object.
  * @param {Array<object>} links - Array of link definitions.
  * @returns {Array<string>} An array of status messages.
  */
-function linkTasksBulk(tasks, links) {
+function linkTasksBulk(allTasksObject, links) {
     const results = [];
     for (const link of links) {
-        results.push(linkTask(tasks, link.taskId, link.parentId));
+        results.push(linkTask(allTasksObject, link.taskId, link.parentId));
     }
     return results;
 }
@@ -347,64 +408,64 @@ function linkTasksBulk(tasks, links) {
 /**
  * Formats a single task for display.
  * @param {object} task - The task object.
- * @param {object} allTasks - The entire tasks object.
+ * @param {object} allTasksCtx - The entire tasks object for context (e.g., parent name).
  * @returns {string} A formatted string representation.
  */
-function formatTask(task, allTasks) {
+function formatTask(task, allTasksCtx) {
     if (!task) return "Error: Task not found for formatting.";
     const output = [];
     output.push(`- ID: ${task.id}, Name: ${task.name}, Status: ${task.status} (Created: ${task.created_at.substring(0, 10)}, Updated: ${task.updated_at.substring(0,10)})`);
     if (task.parent_id) {
-        const parentTask = allTasks[task.parent_id];
-        output.push(`  Parent: ${parentTask ? `ID: ${parentTask.id} - "${parentTask.name}"` : `ID: ${task.parent_id} (Not found)`}`);
+        const parentTask = allTasksCtx[task.parent_id];
+        output.push(`   Parent: ${parentTask ? `ID: ${parentTask.id} - "${parentTask.name}"` : `ID: ${task.parent_id} (Not found - data may be inconsistent if parent file is missing)`}`);
     } else {
-        output.push("  Parent: None");
+        output.push("   Parent: None");
     }
-    const children = Object.values(allTasks).filter(t => t.parent_id === task.id);
+    const children = Object.values(allTasksCtx).filter(t => t.parent_id === task.id);
     if (children.length > 0) {
-        output.push("  Children:");
-        children.forEach(child => output.push(`    - ID: ${child.id} - "${child.name}" (Status: ${child.status})`));
+        output.push("   Children:");
+        children.forEach(child => output.push(`     - ID: ${child.id} - "${child.name}" (Status: ${child.status})`));
     } else {
-        output.push("  Children: None");
+        output.push("   Children: None");
     }
     let openTodos = 0, doneTodos = 0;
     if (task.todos) Object.values(task.todos).forEach(todo => todo.done ? doneTodos++ : openTodos++);
-    output.push(`  Todo Summary: Open: ${openTodos}, Done: ${doneTodos} (Total: ${openTodos + doneTodos})`);
+    output.push(`   Todo Summary: Open: ${openTodos}, Done: ${doneTodos} (Total: ${openTodos + doneTodos})`);
     const numNotes = task.notes ? Object.keys(task.notes).length : 0;
-    output.push(`  Notes Count: ${numNotes}`);
+    output.push(`   Notes Count: ${numNotes}`);
     return output.join("\n");
 }
 
 /**
  * Lists all tasks or a specific task.
- * @param {object} tasks - The tasks object.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string|null} [taskId=null] - Specific task ID or null for all.
  * @returns {string} List of tasks or task details.
  */
-function listTasks(tasks, taskId = null) {
-    if (!tasks || Object.keys(tasks).length === 0) return "No tasks found.";
+function listTasks(allTasksObject, taskId = null) {
+    if (!allTasksObject || Object.keys(allTasksObject).length === 0) return "No tasks found.";
     const output = [];
     if (taskId) {
-        const task = tasks[String(taskId)];
+        const task = allTasksObject[String(taskId)];
         if (task) {
-            output.push(formatTask(task, tasks));
+            output.push(formatTask(task, allTasksObject)); 
             if (task.todos && Object.keys(task.todos).length > 0) {
-                output.push("  Detailed Todos:");
+                output.push("   Detailed Todos:");
                 Object.values(task.todos).sort((a,b) => new Date(a.created_at) - new Date(b.created_at)).forEach(todo => {
-                    output.push(`    - [${todo.done ? "✓" : "✗"}] (ID: ${todo.id}) ${todo.text} (Added: ${todo.created_at.substring(0,10)})`);
+                    output.push(`     - [${todo.done ? "✓" : "✗"}] (ID: ${todo.id}) ${todo.text} (Added: ${todo.created_at.substring(0,10)})`);
                 });
-            } else output.push("  Detailed Todos: None");
+            } else output.push("   Detailed Todos: None");
             if (task.notes && Object.keys(task.notes).length > 0) {
-                output.push("  Detailed Notes:");
+                output.push("   Detailed Notes:");
                 Object.values(task.notes).sort((a,b) => new Date(a.created_at) - new Date(b.created_at)).forEach(note => {
-                    output.push(`    - (ID: ${note.id}) [${note.type}] ${note.text} (Added: ${note.created_at.substring(0,10)})`);
+                    output.push(`     - (ID: ${note.id}) [${note.type}] ${note.text} (Added: ${note.created_at.substring(0,10)})`);
                 });
-            } else output.push("  Detailed Notes: None");
-        } else return `Error: Task ID ${taskId} not found.`;
+            } else output.push("   Detailed Notes: None");
+        } else return `Error: Task ID ${taskId} not found. (It may not have a corresponding file or failed to load)`;
     } else {
         output.push("Tasks (Summary):");
-        Object.values(tasks).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).forEach(taskData => {
-            output.push(formatTask(taskData, tasks));
+        Object.values(allTasksObject).sort((a, b) => new Date(a.created_at) - new Date(b.created_at)).forEach(taskData => {
+            output.push(formatTask(taskData, allTasksObject)); 
             output.push("---");
         });
     }
@@ -413,38 +474,41 @@ function listTasks(tasks, taskId = null) {
 
 /**
  * Fetches and formats notes for a specific task.
- * @param {object} tasks - The tasks object.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @returns {string} Formatted notes or status message.
  */
-function getNotes(tasks, taskId) {
+function getNotes(allTasksObject, taskId) {
     const strTaskId = String(taskId);
-    if (!tasks[strTaskId]) return `Error: Task ID ${strTaskId} not found.`;
-    const task = tasks[strTaskId];
+    if (!allTasksObject[strTaskId]) return `Error: Task ID ${strTaskId} not found.`;
+    const task = allTasksObject[strTaskId];
     if (!task.notes || Object.keys(task.notes).length === 0) return `No notes for task ${strTaskId} ("${task.name}").`;
     const output = [`Notes for Task ${strTaskId} ("${task.name}"):`];
     Object.values(task.notes).sort((a,b) => new Date(a.created_at) - new Date(b.created_at)).forEach(note => {
-         output.push(`  - (ID: ${note.id}) [${note.type}] ${note.text} (Added: ${note.created_at.substring(0,10)})`);
+           output.push(`   - (ID: ${note.id}) [${note.type}] ${note.text} (Added: ${note.created_at.substring(0,10)})`);
     });
     return output.join("\n");
 }
 
 /**
- * Sets the status of a task.
- * @param {object} tasks - The tasks object.
+ * Sets the status of a task. Saves the modified task.
+ * @param {object} allTasksObject - The tasks object.
  * @param {string} taskId - The ID of the task.
  * @param {string} status - The new status.
  * @returns {string} A status message.
  */
-function setStatus(tasks, taskId, status) {
+function setStatus(allTasksObject, taskId, status) {
     const strTaskId = String(taskId);
     const validStatuses = ["new", "blocked", "in progress", "finished"];
     if (!validStatuses.includes(status)) {
         return `Error: Invalid status '${status}'. Valid: ${validStatuses.join(", ")}.`;
     }
-    if (!tasks[strTaskId]) return `Error: Task ID ${strTaskId} not found.`;
-    tasks[strTaskId].status = status;
-    tasks[strTaskId].updated_at = new Date().toISOString();
+    if (!allTasksObject[strTaskId]) return `Error: Task ID ${strTaskId} not found.`;
+    
+    const task = allTasksObject[strTaskId];
+    task.status = status;
+    task.updated_at = new Date().toISOString();
+    saveTask(task); 
     return `Status of task ${strTaskId} set to '${status}'.`;
 }
 // End of user-provided functions
@@ -453,8 +517,8 @@ function setStatus(tasks, taskId, status) {
 class TaskManagerServer {
     constructor() {
         this.server = new Server(
-            { name: 'project-task-manager', version: '0.1.0' },
-            { capabilities: { tools: {}, resources: {} } } // No resources for now
+            { name: 'project-task-manager', version: '0.2.0' }, // version bumped
+            { capabilities: { tools: {}, resources: {} } }
         );
         this.setupToolHandlers();
         this.server.onerror = (error) => console.error('[MCP Error]', error);
@@ -468,8 +532,8 @@ class TaskManagerServer {
         const toolDefinitions = [
             {
                 name: 'addTask',
-                description: 'Adds a new task.',
-                inputSchema: {
+                description: 'Adds a new task. Each task is saved in its own file.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         name: { type: 'string', description: 'Name of the task.' },
@@ -478,16 +542,15 @@ class TaskManagerServer {
                     required: ['name']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks(); 
                     const [taskId, message] = addTask(data.tasks, args.name, args.parentId);
-                    if (taskId) saveData(data);
                     return { taskId, message };
                 }
             },
             {
                 name: 'addTasksBulk',
-                description: 'Adds multiple tasks in bulk.',
-                inputSchema: {
+                description: 'Adds multiple tasks in bulk. Each task is saved individually.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskDefs: {
@@ -506,30 +569,29 @@ class TaskManagerServer {
                     required: ['taskDefs']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const results = addTasksBulk(data.tasks, args.taskDefs);
-                    if (results.some(r => r[0] !== null)) saveData(data);
                     return results;
                 }
             },
             {
                 name: 'listTasks',
-                description: 'Lists all tasks or a specific task with details.',
-                inputSchema: {
+                description: 'Lists all tasks or a specific task with details. Reads from individual task files.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: ['string', 'null'], description: 'ID of a specific task to list, or null/omit to list all.' }
                     }
                 },
                 handler: (args) => {
-                    let data = loadData(); // No save needed for list
+                    let data = loadAllTasks(); 
                     return listTasks(data.tasks, args.taskId);
                 }
             },
             {
                 name: 'addTodo',
-                description: 'Adds a todo item to a specific task.',
-                inputSchema: {
+                description: 'Adds a todo item to a specific task. Saves the modified task file.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task.' },
@@ -538,16 +600,15 @@ class TaskManagerServer {
                     required: ['taskId', 'text']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks(); 
                     const message = addTodo(data.tasks, args.taskId, args.text);
-                    if (!message.startsWith("Error:")) saveData(data);
                     return message;
                 }
             },
             {
                 name: 'addTodosBulk',
-                description: 'Adds multiple todos to a specific task.',
-                inputSchema: {
+                description: 'Adds multiple todos to a specific task. Saves the modified task file once.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task.' },
@@ -556,16 +617,15 @@ class TaskManagerServer {
                     required: ['taskId', 'todoTexts']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const result = addTodosBulk(data.tasks, args.taskId, args.todoTexts);
-                    if (result.successes && result.successes.length > 0) saveData(data);
                     return result;
                 }
             },
             {
                 name: 'toggleTodo',
-                description: 'Toggles the done status of a todo item.',
-                inputSchema: {
+                description: 'Toggles the done status of a todo item. Saves the modified task file.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task.' },
@@ -574,16 +634,15 @@ class TaskManagerServer {
                     required: ['taskId', 'todoId']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const message = toggleTodo(data.tasks, args.taskId, args.todoId);
-                    if (!message.startsWith("Error:")) saveData(data);
                     return message;
                 }
             },
             {
                 name: 'toggleTodosBulk',
-                description: 'Toggles the done status of multiple todos for a task.',
-                inputSchema: {
+                description: 'Toggles the done status of multiple todos for a task. Saves the modified task file once.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task.' },
@@ -592,16 +651,15 @@ class TaskManagerServer {
                     required: ['taskId', 'todoIds']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const result = toggleTodosBulk(data.tasks, args.taskId, args.todoIds);
-                    if (result.successes && result.successes.length > 0) saveData(data);
                     return result;
                 }
             },
             {
                 name: 'addNote',
-                description: 'Adds a note to a specific task.',
-                inputSchema: {
+                description: 'Adds a note to a specific task. Saves the modified task file.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task.' },
@@ -611,17 +669,16 @@ class TaskManagerServer {
                     required: ['taskId', 'noteText']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const message = addNote(data.tasks, args.taskId, args.noteText, args.noteType);
-                    if (!message.startsWith("Error:")) saveData(data);
                     return message;
                 }
             },
             {
                 name: 'addNotesBulk',
-                description: 'Adds multiple notes to a specific task.',
-                inputSchema: {
-                    type: 'object',
+                description: 'Adds multiple notes to a specific task. Saves the modified task file once.',
+                inputSchema: { 
+                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task.' },
                         noteDefs: {
@@ -640,16 +697,15 @@ class TaskManagerServer {
                     required: ['taskId', 'noteDefs']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const result = addNotesBulk(data.tasks, args.taskId, args.noteDefs);
-                     if (result.successes && result.successes.length > 0) saveData(data);
                     return result;
                 }
             },
             {
                 name: 'getNotes',
-                description: 'Fetches and formats notes for a specific task.',
-                inputSchema: {
+                description: 'Fetches and formats notes for a specific task. Reads from the task file.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task to get notes for.' }
@@ -657,14 +713,14 @@ class TaskManagerServer {
                     required: ['taskId']
                 },
                 handler: (args) => {
-                    let data = loadData(); // No save needed
+                    let data = loadAllTasks(); 
                     return getNotes(data.tasks, args.taskId);
                 }
             },
             {
                 name: 'setStatus',
-                description: 'Sets the status of a task.',
-                inputSchema: {
+                description: 'Sets the status of a task. Saves the modified task file.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the task.' },
@@ -673,16 +729,15 @@ class TaskManagerServer {
                     required: ['taskId', 'status']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const message = setStatus(data.tasks, args.taskId, args.status);
-                    if (!message.startsWith("Error:")) saveData(data);
                     return message;
                 }
             },
             {
                 name: 'linkTask',
-                description: 'Links a task to a parent task.',
-                inputSchema: {
+                description: 'Links a task to a parent task. Saves both modified task files.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         taskId: { type: 'string', description: 'ID of the child task.' },
@@ -691,16 +746,15 @@ class TaskManagerServer {
                     required: ['taskId', 'parentId']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks(); 
                     const message = linkTask(data.tasks, args.taskId, args.parentId);
-                    if (!message.startsWith("Error:")) saveData(data);
                     return message;
                 }
             },
             {
                 name: 'linkTasksBulk',
-                description: 'Links multiple tasks to their respective parents.',
-                inputSchema: {
+                description: 'Links multiple tasks to their respective parents. Saves affected task files.',
+                inputSchema: { 
                     type: 'object',
                     properties: {
                         links: {
@@ -719,9 +773,8 @@ class TaskManagerServer {
                     required: ['links']
                 },
                 handler: (args) => {
-                    let data = loadData();
+                    let data = loadAllTasks();
                     const results = linkTasksBulk(data.tasks, args.links);
-                    if (results.some(r => !r.startsWith("Error:"))) saveData(data);
                     return results;
                 }
             }
@@ -741,16 +794,28 @@ class TaskManagerServer {
                 throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${request.params.name}`);
             }
             try {
-                // Basic validation, MCP SDK might do more with schema
+                const args = { ...request.params.arguments }; // Clone args to avoid mutating original request
+
+                // Apply defaults for any parameter defined in schema properties if not provided
+                if (tool.inputSchema.properties) {
+                    for (const paramName in tool.inputSchema.properties) {
+                        if (args[paramName] === undefined && tool.inputSchema.properties[paramName].hasOwnProperty('default')) {
+                            args[paramName] = tool.inputSchema.properties[paramName].default;
+                        }
+                    }
+                }
+                
+                // Validate required parameters after defaults have been potentially applied (though defaults usually make params optional)
                 if (tool.inputSchema.required) {
                     for (const requiredParam of tool.inputSchema.required) {
-                        if (request.params.arguments[requiredParam] === undefined) {
+                        if (args[requiredParam] === undefined) {
+                             // If a required param is still undefined even after default check (e.g. no default for it), it's an error.
                             throw new McpError(ErrorCode.InvalidParams, `Missing required parameter: ${requiredParam}`);
                         }
                     }
                 }
 
-                const result = tool.handler(request.params.arguments);
+                const result = tool.handler(args); 
                 return {
                     content: [{ type: 'text', text: typeof result === 'string' ? result : JSON.stringify(result, null, 2) }]
                 };
@@ -765,12 +830,12 @@ class TaskManagerServer {
     async run() {
         const transport = new StdioServerTransport();
         await this.server.connect(transport);
-        console.error('Project Task Manager MCP server running on stdio, writing data to:', DATA_FILE);
+        console.error(`Project Task Manager MCP server running on stdio, writing tasks to directory: ${path.resolve(TASKS_DIR)}`);
     }
 }
 
-const server = new TaskManagerServer();
-server.run().catch(error => {
+const serverInstance = new TaskManagerServer();
+serverInstance.run().catch(error => {
     console.error("Failed to start TaskManagerServer:", error);
     process.exit(1);
 });

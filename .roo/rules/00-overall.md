@@ -1,20 +1,40 @@
-<<<<<<< HEAD
-** ALWAYS ** Read your entire mode specific file when you have been delegated a task. `.ennwise\modes\` or `.\ennwise\management_base.md` for management mode.
+`.roo/rules/00-overall.md`
 
-The root of the environment is at /workspaces/t-and-m/ (.roo, .ennwise) however the project and all source is under the project folder at /workspaces/t-and-m/project/
+**I. Environment & Configuration:**
 
-=======
->>>>>>> 79dee6710cf17b6b99e70dbdd6f4676ac0d5a33b
-There is no need to show updated file content or display code changes and completed files unless directly requested by the users unless providing direct instructions to modes or documentation is relevant.
+- **File System Structure:**
+  - Environment Root: Check with user and update this file: `/placeholder/file_path/` (Note: This directory contains `.roo` and `.ennwise` markers/configurations).
+  - Project Source Code: Check with user and update this file: `/placeholder/file_path/src/`.
 
-If the context windows grows past 125000, it is time to wrap up the task.  Summarize work done as a note. Detail what you are currently working on, and remaining items  Summarize work done, detail what you are currently doing, and detail what is left to do, and return immediately to the calling task letting them know you have partially completed the task and want to reissue it as a new task. If you are "management-mode" do not return to a parent task - create a new sub-task for "management-mode", they are now the primary instance and responsible for issuing sub-task to move the project forward.
+**II. Task Execution & Delegation:**
 
-<<<<<<< HEAD
-Be aware of commands that will not return to the terminal. Prefer to run things in docker and check for logs etc if they would block.
+- **Handling Partially Completed Tasks:**
+  - If a delegated mode (delegatee) returns and indicates its assigned task is only partially complete, understand that this delegatee has ceased all work on that specific task instance.
+  - To continue or complete the remainder of a partially completed task, it *must* be re-delegated. This requires spawning a new mode instance and assigning the outstanding work to it.
+- **Context Window Management (Limit: 125,000 tokens):**
+  - If the active context window approaches ( 100,000 +) or exceeds 125,000 tokens, initiate an immediate partial completion protocol:
+    1. **Summarize:** Create a concise note detailing:
+       - All work accomplished during the current session.
+       - The specific task and sub-task you were working on when the limit was reached.
+       - All remaining items or steps for the overall objective.
+    2. **Action for Standard Modes:**
+       - Return this summary to your delegating (parent) task.
+       - Clearly state that you have partially completed your assigned task due to context limits and that the remaining work needs to be re-issued as a new task.
+    3. **Action for "Management-Mode":**
+       - Do *not* return to a parent task.
+       - Instead, create a *new sub-task assigned to "Management-Mode"*. This new instance becomes the primary responsible entity for continuing the project.
+       - This new "Management-Mode" instance will then manage the re-delegation of the summarized remaining work.
+- **Command Execution:**
+  - **Non-Blocking Operations:** Be vigilant for commands that block terminal input/output (e.g., `npm test`, long-running servers).
+  - **Preferred Method:** Execute potentially blocking commands within a Docker container environment. Monitor progress through logs or other non-blocking means.
+  - **Alternatives:** If Docker is not used, ensure commands are run in the background or configured to return terminal control, with a mechanism in place to monitor their progress and completion.
+  - **Filepaths:** When executing scripts in the terminal, prefer absolute paths wherever possible. Particularly, when utilizing `cd` use absolute paths.
 
-npm test etc block the terminal, use them in a way that they return or background them and monitor their progress.
+**III. Output & Reporting:**
 
-When starting a new mode and giving them a task, always instruct them at the beginning of your instructions and at the end of the instructions given - to ensure they check their mode specific files before doing anything else -  `.ennwise\modes\` or `.\ennwise\management_base.md` for management mode.
-=======
-Be aware of commands that will not return to the terminal. Prefer to run things in docker and check for logs etc if they would block.
->>>>>>> 79dee6710cf17b6b99e70dbdd6f4676ac0d5a33b
+- **Code and File Content Display:**
+  - By default, do *not* display updated file contents, code diffs, or entire completed files in your responses.
+  - **Exceptions (display content only if):**
+    - The user explicitly requests to see the content.
+    - The content is essential for providing direct, actionable instructions to another mode.
+    - The content is a necessary part of generating relevant documentation.

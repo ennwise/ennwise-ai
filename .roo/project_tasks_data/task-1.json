@@ -1,0 +1,16 @@
+{
+    "id": "1",
+    "name": "QuoteWise Frontend Implementation - Complete UI Development",
+    "parent_id": null,
+    "todos": {
+        "1": {
+            "id": "1",
+            "text": "Review project documentation and technical requirements",
+            "done": true,
+            "created_at": "2025-05-23T20:07:11.181Z"
+        }
+    },    
+    "status": "finished",
+    "created_at": "2025-05-23T20:06:59.869Z",
+    "updated_at": "2025-05-25T04:07:25.238Z"
+}
